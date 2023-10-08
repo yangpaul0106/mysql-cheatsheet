@@ -120,3 +120,29 @@ Innodb_dblwr_writes	# 实际写入次数
 Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统写入压力不大
 ```
 
+- 刷新邻接页（innodb_flush_neighbors）：刷新脏页时，会判断该页所在区的其他页是否是脏页，如果是，则合并到一个IO里面刷新。同时会带来两个问题（1、不怎么脏的页刷新之后可能又会被修改成为脏页；2、固态硬盘有着较高的IOPS）
+- 启动、关闭和恢复：innodb_fast_shutdown（默认值1，表示不进行full purge和merge insert buffer，但是会刷新buffer pool中的脏页）、innodb_force_recovery（默认值0，表示需要恢复时，进行全部的恢复操作，如果不能进行有效恢复，比如数据页发生了corruption，则MySQL会宕机并将错误日志写入err log）
+
+- 错误文件：log_error（默认：/var/log/mysqld.log）
+
+- 慢查询
+
+  - slow_query_log（默认关闭，开启设置为1，关闭设置为0）
+
+  - long_query_time（默认10秒）
+
+  - slow_query_log_file（慢查询日志目录）
+
+  - log_output（日志输出方式：table和file）
+
+    ```mysql
+    show variables like 'long_query_time'
+    show variables like 'slow_query_log'
+    show variables like 'slow_query_log_file'
+    show variables like 'log_queries_not_using_indexes'
+    show variables like 'log_output'
+    show variables like 'log_slow_admin_statements'
+    show variables like 'min_examined_row_limit'
+    ```
+
+    
