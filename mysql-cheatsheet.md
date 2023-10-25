@@ -121,6 +121,7 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
 ```
 
 - 刷新邻接页（innodb_flush_neighbors）：刷新脏页时，会判断该页所在区的其他页是否是脏页，如果是，则合并到一个IO里面刷新。同时会带来两个问题（1、不怎么脏的页刷新之后可能又会被修改成为脏页；2、固态硬盘有着较高的IOPS）
+
 - 启动、关闭和恢复：innodb_fast_shutdown（默认值1，表示不进行full purge和merge insert buffer，但是会刷新buffer pool中的脏页）、innodb_force_recovery（默认值0，表示需要恢复时，进行全部的恢复操作，如果不能进行有效恢复，比如数据页发生了corruption，则MySQL会宕机并将错误日志写入err log）
 
 - 错误文件：log_error（默认：/var/log/mysqld.log）
@@ -145,4 +146,98 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
     show variables like 'min_examined_row_limit'
     ```
 
-    
+- binlog
+
+  - 记录对表的修改操作，affected rows大于0才会有记录
+
+  - point-in-time recovery，replication，sql审计
+
+  - 位置
+
+    - show variables like 'datadir'，binlog.0000X，索引文件binlog.index记录了binlog的文件名
+
+  - ```mysql
+    show variables like 'max_binlog_size' # 单个binlog文件最大大小，默认1GB
+    show variables like 'binlog_cache_size' # 所有未提交事务的binlog会先写入cache，超出部分写入磁盘上的临时文件，默认32KB
+    show variables like 'sync_binlog'	# 写cache多少次就同步binlog cache到磁盘，默认为1
+    show variables like 'binlog_format'
+    show global status like 'binlog_cache%' # Binlog_cache_disk_use（磁盘使用次数）Binlog_cache_use（cache使用次数）
+    show master status # 查看当前正在使用哪一个binlog file，以及当前所处的位置
+    show variables like 'binlog_format' # binlog格式，row和statement
+    ```
+
+  - binlog_format
+
+    - row：记录表行更改情况，暂用空间大，也是逻辑SQL，只是记录的更全面，此格式下可以将事务隔离级别设置为read commited以获得更大的并发性
+
+    - statement：记录的逻辑SQL，即真实执行的update语句，例如:use `test_db`; update t set a=4 where id=1,暂用空间小，如果主服务器上有uuid,rand函数，可能会出现主从不一致，因此默认使用repeatable read isolation level
+
+    - 实验
+
+      ```sql
+      CREATE TABLE `user` (
+        `id` int NOT NULL AUTO_INCREMENT,
+        `username` varchar(64) COLLATE utf8mb4_german2_ci DEFAULT NULL,
+        `password` varchar(255) COLLATE utf8mb4_german2_ci DEFAULT NULL,
+        PRIMARY KEY (`id`),
+        UNIQUE KEY `idx_username` (`username`) USING BTREE
+      ) ENGINE=InnoDB AUTO_INCREMENT=50001 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_german2_ci;
+      # 5W行数据
+      INSERT INTO `test_db`.`user`(`id`, `username`, `password`) VALUES (1, '测试用户1', '123456');
+      
+      select @@session.binlog_format
+      # 使用row格式
+      set @@session.binlog_format='ROW'
+      update test_db.user set password='abc'
+      
+      # 使用statement格式
+      set @@session.binlog_format='STATEMENT'
+      update test_db.user set password='abc'
+      
+      # 结果：row格式的日志占用是statement的2710倍
+      
+      
+      # statement格式binlog记录
+      SET @@SESSION.GTID_NEXT= 'ANONYMOUS'/*!*/;
+      # at 3042931
+      #231025 15:09:01 server id 1  end_log_pos 3043028 CRC32 0x5ad7e686      Query   thread_id=10    exec_time=0     error_code=0
+      SET TIMESTAMP=1698217741/*!*/;
+      BEGIN
+      /*!*/;
+      # at 3043028
+      #231025 15:09:01 server id 1  end_log_pos 3043158 CRC32 0x44022c99      Query   thread_id=10    exec_time=0     error_code=0
+      SET TIMESTAMP=1698217741/*!*/;
+      update test_db.user set password='abc'
+      /*!*/;
+      # at 3043158
+      #231025 15:09:01 server id 1  end_log_pos 3043189 CRC32 0x3757082c      Xid = 564
+      COMMIT/*!*/;
+      
+      
+      # row格式binlog存入格式，$ mysqlbinlog -vv binlog.000026
+      ### UPDATE `test_db`.`user`
+      ### WHERE
+      ###   @1=50000 /* INT meta=0 nullable=0 is_null=0 */
+      ###   @2='测试用户50000' /* VARSTRING(256) meta=256 nullable=1 is_null=0 */
+      ###   @3='123456' /* VARSTRING(1020) meta=1020 nullable=1 is_null=0 */
+      ### SET
+      ###   @1=50000 /* INT meta=0 nullable=0 is_null=0 */
+      ###   @2='测试用户50000' /* VARSTRING(256) meta=256 nullable=1 is_null=0 */
+      ###   @3='abc' /* VARSTRING(1020) meta=1020 nullable=1 is_null=0 */
+      ```
+
+- Innodb文件
+
+  - 表空间文件：
+    - innodb_data_file_path：共享表空间，默认ibdata1:12M:autoextend
+    - innodb_file_per_table：按数据库名称单独存入每张表的数据、索引。（.ibd）
+  - 重做日志文件（redo log file）
+    - 重新启动数据库时利用日志来恢复到之前的状态，保证数据的完整性。
+    - innodb_log_file_size：每个重做日志文件的大小
+    - innodb_flush_log_at_trx_commit：默认值1表示执行commit时将redo log buffer写入磁盘（0表示不主动写入磁盘，等待master thread刷新；2表示将buffer写入到操作系统缓存中）
+    - redo log先写入redo log buffer，在以一个扇区的大小（512字节）从buffer中写入磁盘，因为扇区是最小的写入单元，因此可以保证是必然成功的，所以不需要doublewrite。
+    - 设置得太大，恢复得时候可能需要很长的时间；设置得太小，可能会导致一个事务多次切换重做日志文件，也会导致频繁做async checkpoint（checkpoint超过redo log的capacity），导致系统抖动。
+    - redo log和binlog区别：
+      - binlog无论哪一种格式，都是数据库有关的，存的所有存储引擎的变动。
+      - bin log存的是逻辑日志（SQL）；而redo  log记录的是关于每个页更改的物理操作情况。
+      - 写入时间：bin log在事务提交前进行提交，且只写入一次到磁盘，无论事务有多大；redo log会在事务进行中不断地写入到重做日志文件中。
