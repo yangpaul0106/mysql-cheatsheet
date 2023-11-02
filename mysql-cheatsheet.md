@@ -241,3 +241,51 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
       - binlog无论哪一种格式，都是数据库有关的，存的所有存储引擎的变动。
       - bin log存的是逻辑日志（SQL）；而redo  log记录的是关于每个页更改的物理操作情况。
       - 写入时间：bin log在事务提交前进行提交，且只写入一次到磁盘，无论事务有多大；redo log会在事务进行中不断地写入到重做日志文件中。
+
+- 表
+
+  - 段
+
+    - 数据段：叶子节点
+    - 索引段：非叶子节点
+    - 回滚段
+
+  - 区：不管页大小如何调整，区的大小总是1MB，默认页大小为16KB（innodb_page_size），一个区包含64个页面，建表和插入数据先使用32个碎片页，用完以后再申请连续的一个区，即64个页。
+
+  - 页：默认16KB
+
+  - 行：一个页最多存放的数据行数16KB/2 - 2000，即7992行。
+
+  - innodb undo log存放于系统表空间，即ibdata1中。
+
+  - 行格式：
+
+    - compact：不管是char还是varchar，Null值不占用存储空间。
+    - redundant：Null值varchar不占用空间，char占用空间。
+    - compressed
+    - dynamic
+
+  - 行溢出：
+
+    - varchar最大支持65535指的是字节，而建表语句中的varchar(N)指的是字符串的长度。
+
+    - 每一行支持的最大存储空间总和是65535，如果一行中的所有列的长度总和超过65535，也会建表失败
+
+      ```mysql
+      create table test2(
+      	a varchar(22000),
+      	b varchar(22000),
+      	c varchar(22000)
+      ) charset=latin1 engine=innodb ;
+      
+      --output
+      create table test2(
+      	a varchar(22000),
+      	b varchar(22000),
+      	c varchar(22000)
+      ) charset=latin1 engine=innodb
+      > 1118 - Row size too large. The maximum row size for the used table type, not counting BLOBs, is 65535. This includes storage overhead, check the manual. You have to change some columns to TEXT or BLOBs
+      > 时间: 0.001s
+      ```
+
+      
