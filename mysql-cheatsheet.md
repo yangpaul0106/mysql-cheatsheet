@@ -288,4 +288,4 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
       > 时间: 0.001s
       ```
 
-      
+    - 使用多字节的字符集，如utf-8存储中文占用3个字节，使用char类型和varchar差不多
