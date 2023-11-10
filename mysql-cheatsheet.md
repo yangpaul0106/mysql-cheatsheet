@@ -289,3 +289,11 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
       ```
 
     - 使用多字节的字符集，如utf-8存储中文占用3个字节，使用char类型和varchar差不多
+  
+- 页
+
+  - B+树不能找到记录本身，只能找到记录所在的页。
+
+- sql_mode
+
+- trigger：在insert/update/delete之前或之后进行调用。
