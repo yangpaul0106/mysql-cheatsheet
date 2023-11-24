@@ -301,13 +301,36 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
 - 分区：
 
   - 逻辑上一个表，一个索引。物理上，这个表或索引可以由多个物理分区组成。
+
   - 水平分区
+
   - 分区主要用于数据库的高可用性管理，在oltp中要小心使用。
+
   - 表中存在唯一索引时，分区列必须是唯一索引的一个组成部分
+
   - 分区类型
     - range：主要用于日期列的分区
+    
+      ```mysql
+      drop table pt;
+      create table pt(
+      id int
+      )
+      partition by range(id)(
+      partition p0 values less than (10),
+      partition p1 values less than (20),
+      partition p2 values less than maxvalue -- maxvalue表示无穷大
+      );
+      
+      -- 主要用于按照日期进行分区，如果要删除某年的数据，则只需要删除对应的分区
+      -- 删除分区：alter table sales drop partition p2008;
+      -- 而不是执行delete语句：delete from sales where date>='2008-01-01' and date<'2009-01-01'
+      ```
+    
     - list
+    
     - hash
+    
     - key
 
 - 索引
