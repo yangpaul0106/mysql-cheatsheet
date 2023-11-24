@@ -350,3 +350,84 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
   - 索引添加原则：访问表中一小部分数据。对于性别，地区，类型字段，它们的取值范围很小，称为低选择度，一般不用建索引。因为低选择度的列查询出来的数据量一般比较多；如果某个字段的取值范围比较大，几乎没有重复，则属于高选择度，可以建立B+树索引。cardinality表示选择度，表示索引中不重复记录数量的预估值，cardinality/行数应该尽可能接近1，如果非常小，则需要考虑删除这个索引。
   
 - online ddl：实现原理是通过执行创建和删除操作时，将insert/update/delete这类DML操作日志写入到一个缓存中，等到索引创建完毕后，再重新应用到表中，缓存的大小由innodb_online_alter_log_max_size确定，默认为128MB。
+
+- 联合索引
+
+  - 可以减少索引的创建
+
+  - 联合索引的第二个键值也是进行了排序处理。
+
+    ```mysql
+    create table buy_log(
+      userid int unsigned not null,
+        buy_date date
+    ) engine=innodb;
+    alter table buy_log add key(userid);
+    alter table buy_log add key(userid, buy_date);
+    ```
+
+    ```sql
+    explain select * from buy_log where userid=2;
+    -- 可选两个索引，实际使用了user_id索引
+    ```
+
+    ![](./images/union_index_1.png)
+
+  - 使用联合索引
+
+    ![](./images/union_index_2.png)
+
+- 覆盖索引
+
+  - 待检索的是主键列，或者待检索的是联合索引中的列，就会使用到覆盖索引。
+
+  - 直接从辅助索引中就可以获得查询的记录，而不需要查询聚集索引，减少IO操作。
+
+  - select count(*) from buy_log;不会查询聚集索引，而是选择辅助索引，因为辅助索引远小于聚集索引，可以减少IO次数。
+
+    ![](./images/cover_index_1.png)
+
+- 执行计划里possible_keys如果是primary，就是聚集索引扫描，也就是全表扫描。
+
+- 优化器不使用索引
+
+  - 多发生于范围查询、join连接
+
+  - possible_keys中显示可用索引为idx_hire_date，但是优化器最终选择了聚集索引扫描。因为该条语句查询整行信息，idx_hire_date不能覆盖整行信息，还需要使用辅助索引上的主键id回表一次。虽然idx_hire_date上的数据是有序的，但是回表的数据查找是无序的，因此会对磁盘作离散IO读；如果要访问的数据量小，优化器还是会选择辅助索引，但是如果要访问的数据量比较大（一般占据整表的20%），优化器会选择全表扫描，因为顺序读（扫全表）要远远快于离散读。如果用户使用的是固态硬盘，随机读比较快，也确信使用辅助索引更快，可以使用force index来强制使用某个索引。
+
+    ![](./images/not_using_index_1.png)
+
+- 索引提示（index hint）
+
+  - 显示告诉优化器使用哪个索引。
+  - 可能用到的情况
+    - MySQL优化器错误的使用了某个索引，导致SQL语句运行得比较慢，这种概率非常低。
+    - 某个SQL语句可以选择的索引比较多，优化器选择执行计划时间的开销大于SQL语句本身，例如range查询是比较耗时的操作。
+    - 一般使用force index而不是用use index，因为use index只是告诉优化器可以选择某个索引，优化器还是会根据自己的判断选择。
+
+- MRR优化（multi-range read）
+
+  - 索引本身就是为了减少磁盘 IO，加快查询，而 MRR，则是把索引减少磁盘 IO 的作用，进一步放大
+
+  - 将回表过程的随机访问变为较为顺序的访问。在辅助索引上查找到某一条满足的数据后，先不回表，放入缓存中，继续查询，（因为此时如果回表，在聚集索引上是随机非顺序读取，要读取数据可能第一条分布在数据页1上，而且1和2两个页可能物理上相距很远，第二条分布在数据页2上，第三条分布在数据页1上，但是回表数据页2时，数据页1有可能被LRU淘汰了，又得重新从磁盘读取数据页1，频繁的离散读会导致缓冲池中的页被换出）最后将满足条件的辅助索引上的主键id值进行排序。按顺序去聚集索引上取完整数据。减少缓冲池的页被替换的次数。
+
+  - set optimizer_switch='mrr=on';如果执行计划中的extra列中出现了using mrr，则表示已生效。
+
+  - 将某些范围查询拆分为键值对，直接过滤掉一些不符合查询条件的数据。如果没有MRR，优化器会先根据key_part1查询出大于1000且小于2000的数据，即使key_part2不等于10000。待取出完整数据后再根据key_part2进行过滤，这样会导致无用的数据被回表出来；启用MRR后，优化器会将查询条件拆分为(1000,10000),(1001,10000),(1002,10000)...,(1999,10000)，最后根据拆分的条件进行数据查询。
+
+    ```sql
+    select * from t where key_part1 >= 1000 and key_part1 < 2000 and key_part2 == 10000;
+    -- 存在联合索引(key_part1, key_part2)
+    ```
+
+- 索引下推（index condition pushdown）
+
+  - 5.6开始支持，在索引查询时就根where条件进行过滤，将过滤条件放在存储引擎层。之前是将数据取回server层再进行过滤。这样可以大大减少server层对数据的fetch。执行计划中的extra列如果有using index condition，则表示启用了索引下推优化。
+
+    ```mysql
+    select * from people where zipcode='95054' and lastname like '%paul%' and address like '%hongmei%';
+    -- 联合索引(zipcode,lastname,firstname)
+    -- 通过zipcode查询记录，如果没有支持索引下推，数据需要先根据zipcode值的查询记录取出整行数据，再进行where里面的条件过滤。如果支持索引下推，在查询索引的时候就会进行where条件过滤，再去聚集索引取整行记录。
+    ```
+
+    
