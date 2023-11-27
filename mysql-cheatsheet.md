@@ -430,4 +430,4 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
     -- 通过zipcode查询记录，如果没有支持索引下推，数据需要先根据zipcode值的查询记录取出整行数据，再进行where里面的条件过滤。如果支持索引下推，在查询索引的时候就会进行where条件过滤，再去聚集索引取整行记录。
     ```
 
-    
+- 自适应hash索引（innodb_adaptive_hash_index）
