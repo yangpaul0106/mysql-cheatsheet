@@ -431,3 +431,193 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
     ```
 
 - 自适应hash索引（innodb_adaptive_hash_index）
+
+- 全文检索
+
+  - 倒排索引：再辅助表（auxiliary table）中存储了单词与单词自身在文档所在位置之间的映射。
+
+    - inserted file index：{单词，单词所在文档ID}
+    - full inverted index：{单词，（文档所在ID，在具体文档中的位置）}，具体位置指的是在文档中处于第几个单词的位置。
+
+    ![](./images/full_index_t.png)
+
+​					![](./images/inverted_file_index.png)
+
+​	![](./images/full_inverted_index.png)
+
+full inverted index中存储的（documentId, position），其中position表示文档中第几个单词是目标单词。占用更多的空间，但是能更好地定位数据。
+
+Innodb中，采用full inverted index，将（documentId，position）视为一个ilist，倒排索引将word存放于一张表中，这张表称为auxiliary table(辅助表)，innodb为了提高性能，提供了6张辅助表，这些辅助表存放于磁盘上。
+
+FTS Index Cache（全文检索索引缓存）：红黑树结构，根据(word, ilist)进行排序。新插入进cache中的数据已经更细到对应的数据表中，但是对全文索引的更新可能还只是在cache中，辅助表没有更新。innodb会批量对辅助表进行更新，而不是每插入一次就更新。当对全文索引进行查询时，首先将cache对应的word合并到辅助表中，然后再进行查询。在事务提交时将分词信息写入进cache中；数据库关闭时，将cache中的数据同步到磁盘上的辅助表；当数据库发生宕机时，cache中的分词信息可能没有同步到磁盘的辅助表，下次重新启动数据库时，innodb会自动读取原始文档进行分词，再将分词信息写入cache中。
+
+FTS_DOC_ID：类型必须是bigint unsigned not null，如果没有显示指定，innodb会默认增加此列并加上唯一索引
+
+分词插入是在事务提交时完成，删除操作在事务提交时，不会删除磁盘上的辅助表记录，指挥记录fts document id，并将这个id保存进deleted auxiliary table。
+
+文档的DML不会删除索引中的数据，反而会在deleted表中增加记录，索引会随着应用变得很大，即使索引对应的文档数据已经被删除，查询也不会选择这些索引。可以手工使用命令进行删除：optimize table table_name。如果只要对倒排索引进行操作，可以设置参数：innodb_optimize_fulltext_only=1
+
+```mysql
+show variables like 'innodb_ft_cache_size'	# fts index cache大小，默认不到8MB，超过的部分会被写入磁盘辅助表（auxiliary table）
+select * from information_schema.INNODB_FT_INDEX_TABLE # 查看分词信息
+set global innodb_optimize_fulltext_only=1;
+show variables like 'innodb_ft_num_word_optimize'	# 限制每次optimize时删除的分词数量，默认值为2000
+
+create table fts_a(
+ FTS_DOC_ID bigint unsigned auto_increment not null,
+ body text,
+ primary key(FTS_DOC_ID),
+ fulltext (body)   
+);
+insert into fts_a select null, 'Pease porridge in the pot';
+insert into fts_a select null, 'Pease porridge hot, pease porridge cold';
+insert into fts_a select null, 'Nine days old';
+insert into fts_a select null, 'Some like it hot, some like it cold';
+insert into fts_a select null, 'Some like it in the pot';
+insert into fts_a select null, 'Nine days old';
+insert into fts_a select null, 'I like code days';
+
+set global innodb_ft_aux_table='test/fts_a'
+optimize table fts_a	# 更新索引（DML后）
+select * from information_schema.INNODB_FT_INDEX_TABLE
+```
+
+![](./images/ft_index_table.png)
+
+FIRST_DOC_ID,LAST_DOC_ID和DOC_COUNT分别代表该word第一次出现的文档ID，最后一次出现的文档ID，以及该WORD在多少个文档中出现过。
+
+执行删除操作：delete from fts_a where FTS_DOC_ID=7
+
+select * from information_schema.INNODB_FT_DELETED，文档虽然被删除了，但是执行：select * from information_schema.INNODB_FT_INDEX_TABLE发现索引信息仍然i在磁盘辅助表和cache。执行：optimize table fts_a后，再次执行select * from information_schema.INNODB_FT_INDEX_TABLE发现在辅助索引表中的信息也被删除了。被删除的文档ID为7的不允许再次插入，插入一个ID为7的文档会报错：insert into test.fts_a select 7, 'I like this days'
+
+停用词：默认提供的提用词select * from information_schema.INNODB_FT_DEFAULT_STOPWORD，共36个，用户也可以通过innodb_ft_server_stopword_table来自定义停用词列表。
+
+> 全文检索限制：
+>
+> - 每张表只能有一个全文索引
+> - 多列组合的必须使用相同的字符集和排序规则
+> - 不支持没有单词界定符的语言（中文、日语、韩语）
+
+```mysql
+set global innodb_ft_server_stopword_table='test/user_stopword'
+```
+
+- 全文检索用法
+
+  -  查询模式：默认natural language
+
+    - select * from fts_a where match(body) against ('Porridge' in natural language mode) 等效于select * from fts_a where match(body) against ('Porridge')
+
+    - explain select * from fts_a where match(body) against ('Porridge')
+
+      ![](./images/explain_fulltext_index.png)
+
+  - 查询结果根据相关性逆序返回，相关性计算依据条件：
+
+    - word是否出现在文档中
+
+    - word出现在文档中的次数
+
+    - word在索引列的数量
+
+    - 多少个文档包含了该word
+
+      ![](./images/get_fulltext_relevance.png)
+
+  - 查询的关键词如果是停用词，则返回空
+  - 查询的关键词长度如果不在区间[innodb_ft_min_token_size, innodb_ft_max_token_size]之间，也返回空。min=3,max=84
+
+  - Boolean查询模式
+
+    - +表示一定出现，-表示一定不出现
+
+      ![](./images/fulltext_boolean_mode_samples.png)
+
+    - Boolean mode支持的操作符
+
+      - +表示必须存在
+
+      - -表示必须排除
+
+      - 没有操作符表示该word是可选的，出现的话，会提高相关性
+
+      - @distance，表示查询的多个单词之间的距离是否在distance之内，单位是单词数，如match(body) against('"Pease pot"@30' in boolean mode)表示字符串Pease和pot之间的距离需要在30个单词间隔以内
+
+      - `>`表示该单词出现时增加相关性
+
+      - `<`表示该单词出现时降低相关性
+
+      - `~`表示允许出现，但是相关性为负
+
+      - `*`表示以该单词开头的，如lik*表示lik,like,likes等。
+
+      - "表示短语。
+
+      - 实例
+
+        - 既有pease,又有hot
+
+          ```sql
+          select * from fts_a where match(body) against ('+Pease +Hot' IN BOOLEAN MODE)
+          ```
+
+        - 有pease,没有hot
+
+          ```mysql
+          select * from fts_a where match(body) against ('+Pease -Hot' IN BOOLEAN MODE)
+          ```
+
+        - 有pease或有hot
+
+          ```mysql
+          select * from fts_a where match(body) against ('Pease Hot' IN BOOLEAN MODE)
+          ```
+
+        - 距离搜索，Pease和pot相距30个单词以内
+
+          ```mysql
+          select * from fts_a where match(body) against ('"Pease pot" @30' IN BOOLEAN MODE)
+          ```
+
+        - 短语查询
+
+          ```mysql
+          select * from fts_a where match(body) against ('"Nine days"' in boolean mode)
+          ```
+
+        - query expansion
+
+          - 查询语句添加with query expansion或in natural language mode with query expansion可以开启blind query expansion（automatic relevance feedback）。查询分为两个阶段：
+
+            - 第一：根据搜索的单词进行全文索引查询。
+            - 第二：根据第一阶段产生的分词再进行一次全文检索的查询。
+
+          - 实例
+
+            ```mysql
+            CREATE TABLE articles (
+                id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+                title VARCHAR(200),
+                body TEXT,
+                FULLTEXT (title,body)
+            )  ENGINE=InnoDB;
+            INSERT INTO articles (title,body) VALUES
+            ('MySQL Tutorial','This database tutorial ...'),
+            ("How To Use MySQL",'After you went through a ...'),
+            ('Optimizing Your Database','In this database tutorial ...'),
+            ('MySQL vs. YourSQL','When comparing databases ...'),
+            ('MySQL Security','When configured properly, MySQL ...'),
+            ('Database, Database, Database','database database database'),
+            ('1001 MySQL Tricks','1. Never run mysqld as root. 2. ...'),
+            ('MySQL Full-Text Indexes', 'MySQL fulltext indexes use a ..');
+            ```
+
+            未开启：只返回了body中包含database关键字
+
+            ![](./images/not_turn_on query_expansion.png)
+
+            开启：
+
+            > 注意：query expansion的全文检索可能带来很多非相关性的查询。
+
+            ![](./images/turn_on_query_expansion.png)
