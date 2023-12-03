@@ -614,7 +614,7 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
 
             未开启：只返回了body中包含database关键字
 
-            ![](./images/not_turn_on query_expansion.png)
+            ![](./images/not_turn_on_query_expansion.png)
 
             开启：
 
