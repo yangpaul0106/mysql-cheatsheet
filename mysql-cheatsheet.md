@@ -658,17 +658,27 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
         CREATE FULLTEXT INDEX ft_index ON articles (title,body) WITH PARSER ngram;
         ```
     
-        - 词语搜索（term）：
+        - 全文搜索：
     
           - natural language mode
     
+            > term search在此模式下，进行分词搜索，与search string顺序无关
+    
             ![](./images/term_search_natural_language_mode.png)
+    
+            
     
           - boolean mode
     
+            > term search在此模式下，只对search key里面的空格，逗号之类的进行拆分，不进行分词
+    
             ![](./images/term_search_in_boolean_mode.png)
     
+            ![](./images/full_text_search_xx.png)
+    
         - 短语搜索（phrase）
+    
+          > 对search keyword进行分词，文档中按顺序匹配上分词结果里面的词语即匹配成功,不需要全部的分词都匹配；如果分词结果是停用词或者长度小于token size，则返回空
     
           - natural language mode
     
@@ -678,24 +688,32 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
     
             ![](./images/phrase_search_in_boolean_mode.png)
     
+            ![](./images/phrase_search_boolean_mode_1.png)
+    
+            ![](./images/phrase_search_boolean_mode_2.png)
+    
         - 模糊查询（wildcard）
     
           - 长度小于ngram_token_size
     
             - natural language mode
     
+              > 分词只剩下一个“数”，小于token size，被忽略了
+        
               ![](./images/wild_card_search_lt_token_size_natural_language_mode.png)
-    
+        
             - boolean mode
-    
+        
+              > 不进行分词，只是把通配符去掉，然后在辅助表中查询以“数”开头的word
+              
               ![](./images/wild_card_lt_token_size_boolean_mode.png)
-    
+        
           - 长度大于ngram_token_size
-    
+        
             - natural language mode
-    
+        
               ![](./images/wild_card_search_gt_token_size_natural_language_mode.png)
-    
+        
             - boolean mode
-    
+        
               ![](./images/wild_card_search_gt_token_size_boolean_mode.png)
