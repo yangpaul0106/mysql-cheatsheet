@@ -525,75 +525,76 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
       ![](./images/get_fulltext_relevance.png)
 
   - 查询的关键词如果是停用词，则返回空
+  
   - 查询的关键词长度如果不在区间[innodb_ft_min_token_size, innodb_ft_max_token_size]之间，也返回空。min=3,max=84
-
+  
   - Boolean查询模式
-
+  
     - +表示一定出现，-表示一定不出现
-
+  
       ![](./images/fulltext_boolean_mode_samples.png)
-
+  
     - Boolean mode支持的操作符
-
+  
       - +表示必须存在
-
+  
       - -表示必须排除
-
+  
       - 没有操作符表示该word是可选的，出现的话，会提高相关性
-
+  
       - @distance，表示查询的多个单词之间的距离是否在distance之内，单位是单词数，如match(body) against('"Pease pot"@30' in boolean mode)表示字符串Pease和pot之间的距离需要在30个单词间隔以内
-
+  
       - `>`表示该单词出现时增加相关性
-
+  
       - `<`表示该单词出现时降低相关性
-
+  
       - `~`表示允许出现，但是相关性为负
-
+  
       - `*`表示以该单词开头的，如lik*表示lik,like,likes等。
-
+  
       - "表示短语。
-
+  
       - 实例
-
+  
         - 既有pease,又有hot
-
+  
           ```sql
           select * from fts_a where match(body) against ('+Pease +Hot' IN BOOLEAN MODE)
           ```
-
+  
         - 有pease,没有hot
-
+  
           ```mysql
           select * from fts_a where match(body) against ('+Pease -Hot' IN BOOLEAN MODE)
           ```
-
+  
         - 有pease或有hot
-
+  
           ```mysql
           select * from fts_a where match(body) against ('Pease Hot' IN BOOLEAN MODE)
           ```
-
+  
         - 距离搜索，Pease和pot相距30个单词以内
-
+  
           ```mysql
           select * from fts_a where match(body) against ('"Pease pot" @30' IN BOOLEAN MODE)
           ```
-
+  
         - 短语查询
-
+  
           ```mysql
           select * from fts_a where match(body) against ('"Nine days"' in boolean mode)
           ```
-
+  
         - query expansion
-
+  
           - 查询语句添加with query expansion或in natural language mode with query expansion可以开启blind query expansion（automatic relevance feedback）。查询分为两个阶段：
-
+  
             - 第一：根据搜索的单词进行全文索引查询。
             - 第二：根据第一阶段产生的分词再进行一次全文检索的查询。
-
+  
           - 实例
-
+  
             ```mysql
             CREATE TABLE articles (
                 id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
@@ -611,13 +612,90 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
             ('1001 MySQL Tricks','1. Never run mysqld as root. 2. ...'),
             ('MySQL Full-Text Indexes', 'MySQL fulltext indexes use a ..');
             ```
-
+  
             未开启：只返回了body中包含database关键字
-
+  
             ![](./images/not_turn_on_query_expansion.png)
-
+  
             开启：
-
+  
             > 注意：query expansion的全文检索可能带来很多非相关性的查询。
-
+  
             ![](./images/turn_on_query_expansion.png)
+    
+    - 支持中文的分词器（ngram）
+    
+      > 支持InnoDB和MyISAM
+    
+      - 分词大小：ngram_token_size，运行时只读，支持启动时修改，将文本分割为连续的n个字符，例如n=2，文本为”数据库“，分词结果为[数据，据库]；分词后的字符里如果包含有（不只是完全相等）停用词，则这个分词会被忽略；分词时会忽略掉空格；停用词的长度如果超过n，分词的时候会忽略掉这个停用词。应该尽量将这个参数设置得小一点，2比较合适。
+    
+        ```mysql
+        mysqld --ngram_token_size=2 -- 启动时修改
+        
+        --修改配置文件
+        [mysqld]
+        ngram_token_size=2
+        ```
+    
+        ```mysql
+        CREATE TABLE articles (
+              id INT UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY,
+              title VARCHAR(200),
+              body TEXT,
+              FULLTEXT (title,body) WITH PARSER ngram
+        ) ENGINE=InnoDB CHARACTER SET utf8mb4;
+        
+        INSERT INTO articles (title,body) VALUES
+            ('数据库管理','在本教程中我将向你展示如何管理数据库'),
+            ('数据库应用开发','学习开发数据库应用程序');
+        SET GLOBAL innodb_ft_aux_table="test_db/articles";
+        optimize table articles;
+        SELECT * FROM INFORMATION_SCHEMA.INNODB_FT_INDEX_CACHE ORDER BY doc_id, position;
+        
+        # 如果是后续添加全文检索索引
+        ALTER TABLE articles ADD FULLTEXT INDEX ft_index (title,body) WITH PARSER ngram;
+        # Or:
+        CREATE FULLTEXT INDEX ft_index ON articles (title,body) WITH PARSER ngram;
+        ```
+    
+        - 词语搜索（term）：
+    
+          - natural language mode
+    
+            ![](./images/term_search_natural_language_mode.png)
+    
+          - boolean mode
+    
+            ![](./images/term_search_in_boolean_mode.png)
+    
+        - 短语搜索（phrase）
+    
+          - natural language mode
+    
+            ![](./images/phrase_search_in_natural_language_mode.png)
+    
+          - boolean mode
+    
+            ![](./images/phrase_search_in_boolean_mode.png)
+    
+        - 模糊查询（wildcard）
+    
+          - 长度小于ngram_token_size
+    
+            - natural language mode
+    
+              ![](./images/wild_card_search_lt_token_size_natural_language_mode.png)
+    
+            - boolean mode
+    
+              ![](./images/wild_card_lt_token_size_boolean_mode.png)
+    
+          - 长度大于ngram_token_size
+    
+            - natural language mode
+    
+              ![](./images/wild_card_search_gt_token_size_natural_language_mode.png)
+    
+            - boolean mode
+    
+              ![](./images/wild_card_search_gt_token_size_boolean_mode.png)
