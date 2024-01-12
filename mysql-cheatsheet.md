@@ -721,43 +721,44 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
 - 锁
 
   - innodb行锁不会增加开销，其存储引起不需要锁升级，因为一个锁和多个锁的开销是一样的。
+  
   - latch与锁
     - latch：对象是线程，轻量级的锁，分为互斥量和读写锁，用来保证并发线程操作临界资源的正确性。
     - lock：对象是事务，用来锁定表、页、行。在事务commit或rollback后进行释放。
-
+  
   - innodb的共享锁（S）和排他锁（X）
-
+  
     这里的兼容是针对行数据。
-
+  
     ![](./images/x_lock_and_s_lock.png)
-
+  
     - 锁粒度：多粒度锁定，允许事务在行级锁和表级锁同时存在，通过引入意向锁（表级锁），将锁定的对象分为多个层次，使用意向锁，意味着事务希望在更细粒度上进行加锁。对最细粒度的对象进行上锁前，需要对粗粒度的对象上锁。例如，如果要对某一行r上X锁，分别需要对数据库、表、页上意向锁IX，最后才对行记录r上X锁，其中任何一个部分导致等待都会引起阻塞。例如，在对记录r上X锁之前，已经有事务对表上了`S表锁`，之后事务需要对记录r上意向锁IX，由于不兼容，后面执行的这个事务阻塞。
-
+  
     - 意向锁：由于innodb支持的是行级锁，因此不会与意向锁冲突，所以意向锁不会阻塞除全表扫描以外的任何请求。
-
+  
       ![](./images/table_lock_compatible.png)
-
+  
   - 查看锁信息（information_schema）
-
+  
     - INNODB_TRX
-
+  
       ![](./images/innodb_trx_table_sturcture.png)
-
+  
     - INNODB_LOCKS
-
+  
       ![](./images/innodb_locks_table_sturcture.png)
-
+  
     - INNODB_LOCK_WAITS
-
+  
       ![](./images/innodb_lock_waits_table_structure.png)
-
+  
   - 一致性非锁定读（consistent nonlocking read）：通过undo log实现多版本控制的方式，按照快照生成时间进行读取。事务A需要读取的行即使正在被事务B执行更新或删除且事务B占着锁未提交，事务A不会等待，而是读取相应的一个快照数据。使用undo log，不会对读取快照数据引起额外的开销，而且读取快照数据也不会上锁，因为没有事务需要对历史数据进行修改。
-
+  
     - 快照数据时间点
-
+  
       - read committed：总是读取被锁定行的最新一份快照数据
       - repeatable read：总是读取事务开始执行时的行数据版本
-
+  
       | 时间 | 会话A                                                        | 会话B                              |
       | ---- | ------------------------------------------------------------ | ---------------------------------- |
       | 1    | begin                                                        |                                    |
@@ -768,5 +769,12 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
       | 6    |                                                              | commit;                            |
       | 7    | select * from parent where id=1;【如果是read committed，则返回结果为空；如果是repeatable read，则返回还是1提奥记录且值为1】 |                                    |
       | 8    | commit;                                                      |                                    |
-
+  
   - 一致性锁定读
+  
+    > innodb默认使用一致性非锁定读。
+  
+    - select ... for update：加X锁
+    - select .. lock in share mode：加S锁
+    - 一致性非锁定读必须在一个显式的事务里使用：begin、start transaction或者set autocommit=0。
+    - 可以使用一致性非锁定读读取某个已经被select ... for update锁定的行。
