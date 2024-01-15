@@ -778,3 +778,71 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
     - select .. lock in share mode：加S锁
     - 一致性非锁定读必须在一个显式的事务里使用：begin、start transaction或者set autocommit=0。
     - 可以使用一致性非锁定读读取某个已经被select ... for update锁定的行。
+  
+  - 自增锁：表级锁，会在自增值更新后立即释放锁，而不是等申请自增值的事务完成或回滚才释放锁。
+  
+  - 外键和锁：innodb会自动给外键列加锁。对于外键值的更新或插入，首先需要查询父表，不是使用非一致性锁定，而是使用锁定读的方式加锁。
+  
+    ![](./images/fk_locking_read.png)
+  
+    ![](./images/fk_locking_innodb_locks.png)
+
+- 锁的算法
+
+  - 3种行锁
+
+    > 如果表里面没有索引，innodb会使用隐式的主键id进行锁定。
+
+    - record lock：单行记录锁
+
+    - gap lock：间隙锁，锁定一个范围，但是不包括索引记录本身。
+
+    - next-key lock：gap lock + record lock，锁定一个范围，并且锁定记录本身。里如一个索引有10、11、13和20，那么对应的锁定区间有(负无穷, 10], (10, 11]，(11, 13]，(13, 20]，(20, 正无穷)。解决幻读问题。当查询的索引是唯一索引时，会退化为record lock。如果唯一键由多个列组合，查询仅查询某一个列时，其实等效于range类型查询，依然使用next-key lock锁定。
+
+      - 唯一键例子：
+
+      ```mysql
+      create table t(a int primary key);
+      INSERT INTO `test`.`t`(`a`) VALUES (1);
+      INSERT INTO `test`.`t`(`a`) VALUES (2);
+      INSERT INTO `test`.`t`(`a`) VALUES (5);
+      ```
+
+      ![](./images/next-key_lock_unique_index.png)
+
+      - 非唯一键问题
+
+      ```mysql
+      -- repeatable read
+      create table z(a int, b int, primary key(a), key(b));
+      insert into z select 1,1;
+      insert into z select 3,1;
+      insert into z select 5,3;
+      insert into z select 7,6;
+      insert into z select 10,8;
+      
+      -- session A
+      begin;
+      select * from z where b = 3 for update; -- 聚集索引锁定a=5;二级索引b锁定(1,3)、3、(3,6)
+      
+      -- session B
+      begin;
+      select * from z where a = 5 lock in share mode; -- 因为聚集索引已经锁定a=5
+      insert into z select 4, 2;  -- b=2也在被锁定的范围
+      insert into z select 6,5; -- b=5也在被锁定的范围
+      insert into z select 2,2; -- *** 会检查插入记录的下一个记录是否被锁定，其他会话已经锁定了(1,3]***
+      
+      -- gap lock防止多个事务将记录插入到同一个范围，不阻止会产生幻读问题，会话A如果没有锁定[3,6)，此时如果其他会话插入一条b=3的记录，那么会话A再次查询会返回这条新插入的记录，产生幻读。
+      
+      -- 显式关闭gap lock
+      -- 事务隔离级别设置为read committed
+      -- 将参数innodb_locks_unsafe_for_binlog设置为1
+      -- 但是外键约束和唯一性检查依然需要gap lock，其他情况使用record lock。 
+      
+      -- session C（不会阻塞）
+      insert into z select 8, 6;
+      insert into z select 2,0;
+      insert into z select 6,7;
+      ```
+
+      
