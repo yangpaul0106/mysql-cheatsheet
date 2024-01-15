@@ -845,4 +845,24 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
       insert into z select 6,7;
       ```
 
-      
+- 锁问题
+
+  - 脏读：读取了其他事务未提交的数据，read-uncommitted隔离级别下会发生。在replication的slave节点，如果节点查询不需要特别精确的返回值。
+
+  ![](./images/dirty_read_samples.png)
+
+  - 不可重复读：MySQL里面称之为幻读，在一个事务里多次读取同一数据集合，在这几次读取之间，有其他事务做了DML操作且提交，第一个事务读取到了这些DML操作，造成一个事务的多次读取不一样。innodb使用next-key lock解决不可重复读。
+
+  ![](./images/un-repeatable-read.png)
+
+  - 丢失更新
+
+  ![](./images/lost_update.png)
+
+  
+
+![](./images/lost_update_sample_explain.png)
+
+![](./images/solve_lost_update.png)
+
+如果程序不需要读取的话，也可以直接使用update进行数据库更新。
