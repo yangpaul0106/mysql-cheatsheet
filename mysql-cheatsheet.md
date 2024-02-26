@@ -866,3 +866,8 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
 ![](./images/solve_lost_update.png)
 
 如果程序不需要读取的话，也可以直接使用update进行数据库更新。
+
+- 阻塞
+  - innodb_lock_wait_timeout：申请锁等待超时时间，默认50s
+  - innodb_rollback_on_timeout：超时发生后，是否回滚事务，默认OFF。
+- 死锁：两个或两个以上的事务，争夺锁资源造成互相等待的一种现象。常见有AB-BA死锁
