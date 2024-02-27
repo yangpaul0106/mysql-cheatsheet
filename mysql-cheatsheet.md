@@ -871,3 +871,10 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
   - innodb_lock_wait_timeout：申请锁等待超时时间，默认50s
   - innodb_rollback_on_timeout：超时发生后，是否回滚事务，默认OFF。
 - 死锁：两个或两个以上的事务，争夺锁资源造成互相等待的一种现象。常见有AB-BA死锁
+
+- 事务
+  - 持久性：事务提交后，即使发生系统宕机，数据库也能恢复数据；但是如果不是数据库本身的问题，而是一些外部原因，例如RAID卡损坏，数据还是可能丢失。因此事务持久性保证事务系统的高可靠性，而不是高可用性。
+  - redo log：保证事务的原子性和持久性，用来恢复已提交事务修改的页操作。是物理日志，记录的是某个页的操作。
+    - redo log buffer：
+    - redo log file：
+  - undo log：保证事务的一致性，恢复某行记录到某个特定版本，是逻辑日志，记录的是具体的sql。
