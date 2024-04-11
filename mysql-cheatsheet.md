@@ -234,8 +234,8 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
   - 重做日志文件（redo log file）
     - 重新启动数据库时利用日志来恢复到之前的状态，保证数据的完整性。
     - innodb_log_file_size：每个重做日志文件的大小
-    - innodb_flush_log_at_trx_commit：默认值1表示执行commit时将redo log buffer写入磁盘（0表示不主动写入磁盘，等待master thread刷新；2表示将buffer写入到操作系统缓存中）
-    - redo log先写入redo log buffer，在以一个扇区的大小（512字节）从buffer中写入磁盘，因为扇区是最小的写入单元，因此可以保证是必然成功的，所以不需要doublewrite。
+    - innodb_flush_log_at_trx_commit：默认值1表示执行commit时将redo log buffer写入磁盘，调用fsync（0表示不主动写入磁盘，等待master thread刷新；2表示将buffer写入到操作系统缓存中）
+    - redo log：重做日志缓存和重做日志文件都是以512字节的块进行存储的。先写入redo log buffer，在以一个扇区的大小（512字节）从buffer中写入磁盘，因为扇区是最小的写入单元，因此可以保证是必然成功的，所以不需要doublewrite。
     - 设置得太大，恢复得时候可能需要很长的时间；设置得太小，可能会导致一个事务多次切换重做日志文件，也会导致频繁做async checkpoint（checkpoint超过redo log的capacity），导致系统抖动。
     - redo log和binlog区别：
       - binlog无论哪一种格式，都是数据库有关的，存的所有存储引擎的变动。
@@ -870,11 +870,69 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
 - 阻塞
   - innodb_lock_wait_timeout：申请锁等待超时时间，默认50s
   - innodb_rollback_on_timeout：超时发生后，是否回滚事务，默认OFF。
+  
 - 死锁：两个或两个以上的事务，争夺锁资源造成互相等待的一种现象。常见有AB-BA死锁
 
 - 事务
   - 持久性：事务提交后，即使发生系统宕机，数据库也能恢复数据；但是如果不是数据库本身的问题，而是一些外部原因，例如RAID卡损坏，数据还是可能丢失。因此事务持久性保证事务系统的高可靠性，而不是高可用性。
+  
   - redo log：保证事务的原子性和持久性，用来恢复已提交事务修改的页操作。是物理日志，记录的是某个页的操作。
+  
+    - 顺序写，在数据库运行时不需要进行读取操作。
+    - innodb_flush_log_at_trx_commit：0，1（默认），2
+  
+    ![](./images/innodb_flush_log_at_trx_commit_performance.png)
+  
     - redo log buffer：
     - redo log file：
+    - 刷磁盘时机：
+      - 事务提交时
+      - 当log buffer中有一半的内存空间已经被使用时
+      - log checkpoint时
+  
+  - bin log在事务提交完成后一次写入，redo log在事务进行中不断写入。
+  
   - undo log：保证事务的一致性，恢复某行记录到某个特定版本，是逻辑日志，记录的是具体的sql。
+  
+    - 随机读写
+    - 存放于共享表空间里面的undo segment。
+    - 逻辑日志，undo也是逻辑地将数据库数据进行恢复。不会将一个数据页中的数据进行回滚，因为这样会影响其他事务正在进行的工作。
+    - 开始事务时，分配回滚段，表空间增长，进行rollback操作时，表空间并不会收缩，会继续写回滚段，执行相反的操作，insert对应delete，delete对应insert。
+    - MVCC，如果读取某一行记录的时候发现当前行被其他事务占用，可以用过undo读取之前的版本，实现非锁定读。
+    - undo log也会产生redo log，因为undo log也需要持久性。
+    - innodb_undo_directory：（默认数据目录）
+    - innodb_rollback_segments：回滚段数量（128）
+    - innodb_undo_tablespaces：表空间数量（2）,用于设置回滚段文件数量，设置后在数据目录会出现undo为前缀的文件。
+    - 一个回滚段有1024个undo log segment，在undo log segment中进行undo页的申请
+    - 支持的并发数量：innodb_rollback_segments * 1024
+    - show engine innodb status：History list length是undo log页的数量，由于undo log页可以复，因此purge后该值也可以不为0。
+    - innodb_purge_batch_size：默认300
+  
+  - LSN
+  
+    - 含义
+      - 重做日志写入的总量
+      - checkpoint的位置
+      - 页的版本
+    - show engine innodb status
+      - Log sequence number：当前的LSN
+      - Log flushed up to：刷新到重做日志文件的LSN（log buffer ----> log file）
+      - Last checkpoint at：刷新到磁盘的LSN
+  
+  - 恢复：数据库正常或异常重启后，都会进行恢复操作，从日志文件的checkpoint开始到当前LSN应用重做日志，由于重做日志是物理日志，恢复速度比逻辑日志（bin log）要快得多。
+  
+    ![](./images/redo_log_format.png)
+  
+  - TPS计算
+  
+    - (com_commit +com_rollback ) / time。只统计显示提交或rollback的事务，即明确使用了begin或start transaction开启事务。
+  
+  - 不好的事务提交习惯
+  
+    - 循环中提交事务，如果load1(100000)，中间出错了不能回滚；而且会进行10W次redo log file的写入，引起性能问题。
+  
+      ![](./images/loop_commit_trx.png)
+  
+    - 自动提交
+  
+  - 长事务：将大数据量的操作（更新1亿银行账户的利息）拆分成小份，每次处理完小份后，记录下处理的结果（比如已经处理的最大ID），便于在失败了就接着失败的地方继续处理，防止产生大量回滚日志以及增加回滚时间。
