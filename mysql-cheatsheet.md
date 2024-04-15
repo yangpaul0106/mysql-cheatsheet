@@ -936,3 +936,74 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
     - 自动提交
   
   - 长事务：将大数据量的操作（更新1亿银行账户的利息）拆分成小份，每次处理完小份后，记录下处理的结果（比如已经处理的最大ID），便于在失败了就接着失败的地方继续处理，防止产生大量回滚日志以及增加回滚时间。
+
+## 备份
+
+> 备份时需要考虑数据一致性，使用repeatable-read隔离级别，mysqldump加上--single-transaction。
+>
+> 异地备份、容灾。
+
+### 备份方法
+
+#### 热备
+
+直接在运行的数据库上进行备份，对运行的数据库没有任何影响，Online backup。
+
+#### 冷备
+
+在停止的数据库上进行，复制物理文件，文件大，但恢复速度快，offline backup。
+
+#### 温备
+
+在运行的数据库上进行备份，但是会对数据库操作有影响，如加一个全局的读锁以保证备份数据的一致性。
+
+## 备份内容
+
+#### 逻辑备份
+
+SQL语句或者实际的数据，具有可读性。mysqldump和select * into outfile。适用于数据库升级、迁移。缺点是恢复时间较长。
+
+##### mysqldump
+
+```mysql
+-- 可以备份整个实例或部分库
+-- 实现对表按where条件进行选择
+mysqldump --user root --password --single-transaction --where 'id=7' test_db articles > articles.sql
+
+-- 完整操作
+-- 备份
+mysqldump --user root --password --single-transaction test_db > test_db_backup.sql
+-- 恢复
+mysql -uroot -p test_db < test_db_backup.sql
+```
+
+#### 裸文件备份
+
+复制物理文件。ibbackup、xtrabackup。恢复时间较逻辑备份短很多。
+
+### 备份内容方式
+
+#### 完全备份
+
+#### 增量备份
+
+在上次完全备份的基础上，对更改的数据进行备份。记录当前每页最后的检查点LSN，如果大于之前全备的LSN，则备份该页，否则不备份该页（xtrabackup工作原理）
+
+#### 日志备份
+
+binlog备份，通过一个完全的binlog进行重做（replay）来完成数据库的point-in-time恢复。备份前先通过flush logs生成一个新的bin log file。
+
+```mysql
+-- 查看日志文件
+show binary logs
+-- 恢复binlog
+mysqlbinlog binlog.0001 | mysql -u root -p
+-- 恢复多个binlog
+mysqlbinlog binlog.[0-10]* | mysql -u root -p
+```
+
+### xtrabackup
+
+### 主从
+
+![](./images/master_slave.png)
