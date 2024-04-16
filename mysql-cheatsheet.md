@@ -1,3 +1,5 @@
+![](./images/innodb_articheture.png)
+
 - 启动查看配置文件目录
 
   ```shell
@@ -41,7 +43,7 @@
   ```mysql
   show engine innodb status
   -- （不是当前状态，Per second averages calculated from the last 2 seconds）
-  -- buffer pool size: 缓冲池页的个数，乘以16K，就是缓冲池的总大小
+  -- buffer pool size: 缓冲池页的个数，乘以16K，就是缓冲池的总大小，默认128MB
   -- free buffers:free列表页的个数
   -- database pages：LRU列表页的数量
   -- buffer pool hit rate：缓冲池命中率，一般不低于95%
@@ -55,7 +57,7 @@
 
 - flush list：脏页（Modified db pages）既存在于LRU列表，也存在于flush list。LRU用于管理页的可用性，flush list管理将脏页刷新回磁盘。
 
-- innodb_log_buffer_size：show variables like 'innodb_log_buffer_size'，单位字节，不需要设置得很大，因为每一秒都会将buffer中的日志刷新回磁盘。
+- innodb_log_buffer_size：show variables like 'innodb_log_buffer_size'，单位字节，默认16MB，不需要设置得很大，因为每一秒都会将buffer中的日志刷新回磁盘。（redo log）
 
 - Checkpoint：将缓冲池中的脏页刷新回磁盘。DML，修改或删除操作先发生在缓冲池中，后续将这些脏页刷新回磁盘。通过write ahead log策略，当事务提交时，先写redo log，再修改页，防止发生宕机引起数据丢失问题。
 
@@ -70,11 +72,11 @@
     - async/sync flush checkpoint：redo log文件不够用，强制刷新脏页回磁盘，回收对应的日志文件空间。
     - dirty page too much checkpoint：innodb_max_dirty_pages_pct，控制脏页比例，超过则执行checkpoint。
   - master thread:
-    - show variables like 'innodb_io_capacity'（默认值：200）：
+    - show variables like 'innodb_io_capacity'（默认值：200，后台每秒刷新buffer pool中的脏页和合并change buffer的次数IOPS）：
       - merge insert buffer页数量为此值5%
       - 刷新脏页数量为此值
     - 执行full purge时，每次回收的undo页数量：innodb_purge_batch_size（默认300）
-  
+
 - change buffer（insert\delete\update）：适用于非唯一的二级辅助索引，非聚集索引是离散存储的，进行插入时需要离散的访问非聚集索引数据页；和buffer pool中的数据一样，也具有磁盘数据。先判断数据是否在buffer pool中，如果不在，就先存入change buffer中，后续再将多个插入合并到一个操作中。
 
   - show engine innodb status
@@ -95,7 +97,7 @@
     - 如果进行了大量的插入操作，insert buffer中的数据没有merge到buffer pool中，会导致重启时间过长
     - 暂用过多的buffer pool内存。
 
-  - innodb_change_buffering
+  - innodb_change_buffering：启用哪些类型的buffer，默认all。
 
   - innodb_change_buffer_max_size（默认为25，占用四分之一，最大有效值50）
 
@@ -108,12 +110,16 @@
 - double write：
 
   > 保证数据页的可靠性。如果buffer pool中的脏页在flush到磁盘的过程中，数据库或操作系统宕机，会导致原始磁盘上的数据不完整，此时使用redo log是无意义的，因为原始数据已经被破坏了。
+  >
+  > 可以使用double write buffer file来修正不完整写入的数据页。
 
-  - 解决方案：通过double write保存一个buffer pool中脏页在磁盘和内存上的一个的副本。刷新脏页时，先不直接写磁盘，而是将脏页数据复制到double write buffer中，内存区域大小为2MB，再分两次顺序写入double write的磁盘共享表空间位置，通过一次调用fsync。double write写好后，再将double write buffer页中的数据写入各个表空间
+  - 解决方案：通过double write保存一个buffer pool中脏页在磁盘和内存上的一个的副本。刷新脏页时，先不直接写磁盘，而是将脏页数据复制到double write buffer中，内存区域大小为2MB，再以数据块的形式写入到double write的磁盘共享表空间位置，通过一次调用fsync。double write写好后，再将double write buffer页中的数据写入各个表空间
 
 ​		![](./images/double_write.png)
 
 ```mysql
+innodb_doublewrite_files：doublewrite文件个数，默认两个，一个对应flush list，一个对应LRU list。
+innodb_doublewrite_pages：每个线程操作的doublewrite page个数。
 show global status like 'innodb_dblwr%'
 Innodb_dblwr_pages_written # 写入数据页个数
 Innodb_dblwr_writes	# 实际写入次数
@@ -168,12 +174,14 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
 
   - binlog_format
 
-    - row：记录表行更改情况，暂用空间大，也是逻辑SQL，只是记录的更全面，此格式下可以将事务隔离级别设置为read commited以获得更大的并发性
+    > ./blogs/mysql binlog的row和statement格式区别.md
 
-    - statement：记录的逻辑SQL，即真实执行的update语句，例如:use `test_db`; update t set a=4 where id=1,暂用空间小，如果主服务器上有uuid,rand函数，可能会出现主从不一致，因此默认使用repeatable read isolation level
+    - row：row记录的是每一行记录的增/删/改操作，若一条sql语句修改了1000条记录，row格式的日志将会分别记录1000条记录的修改，而statement仅记录一条sql语句。row占用空间大，也是逻辑SQL，只是记录的更全面，此格式下可以将事务隔离级别设置为read commited以获得更大的并发性
+
+    - statement：记录的逻辑SQL，即真实执行的update语句，例如:use `test_db`; update t set a=4 where id=1,占用空间小，如果主服务器上有uuid,rand函数，可能会出现主从不一致，因此默认使用repeatable read isolation level
 
     - 实验
-
+    
       ```sql
       CREATE TABLE `user` (
         `id` int NOT NULL AUTO_INCREMENT,
@@ -233,7 +241,8 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
     - innodb_file_per_table：按数据库名称单独存入每张表的数据、索引。（.ibd）
   - 重做日志文件（redo log file）
     - 重新启动数据库时利用日志来恢复到之前的状态，保证数据的完整性。
-    - innodb_log_file_size：每个重做日志文件的大小
+    - innodb_log_file_size（8.0.30废弃）：每个重做日志文件的大小
+    - innodb_redo_log_capacity：redo log占用的总大小。默认48MB。增大此值，减少checkpoint，减轻磁盘IO压力。过大的文件可能会会造成crash recovery时间过长。
     - innodb_flush_log_at_trx_commit：默认值1表示执行commit时将redo log buffer写入磁盘，调用fsync（0表示不主动写入磁盘，等待master thread刷新；2表示将buffer写入到操作系统缓存中）
     - redo log：重做日志缓存和重做日志文件都是以512字节的块进行存储的。先写入redo log buffer，在以一个扇区的大小（512字节）从buffer中写入磁盘，因为扇区是最小的写入单元，因此可以保证是必然成功的，所以不需要doublewrite。
     - 设置得太大，恢复得时候可能需要很长的时间；设置得太小，可能会导致一个事务多次切换重做日志文件，也会导致频繁做async checkpoint（checkpoint超过redo log的capacity），导致系统抖动。
@@ -250,7 +259,7 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
     - 索引段：非叶子节点
     - 回滚段
 
-  - 区：不管页大小如何调整，区的大小总是1MB，默认页大小为16KB（innodb_page_size），一个区包含64个页面，建表和插入数据先使用32个碎片页，用完以后再申请连续的一个区，即64个页。
+  - 区：不管页大小如何调整，区的大小总是1MB，默认页大小为16KB（innodb_page_size），一个区包含64个页，建表和插入数据先使用32个碎片页，用完以后再申请连续的一个区，即64个页。
 
   - 页：默认16KB
 
@@ -269,8 +278,10 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
 
     - varchar最大支持65535指的是字节，而建表语句中的varchar(N)指的是字符串的长度。
 
-    - 每一行支持的最大存储空间总和是65535，如果一行中的所有列的长度总和超过65535，也会建表失败
+      > Values in `VARCHAR` columns are variable-length strings. The length can be specified as a value from 0 to 65,535. The effective maximum length of a `VARCHAR` is subject to the maximum row size (65,535 bytes, which is shared among all columns) and the character set used
 
+    - 每一行支持的最大存储空间总和是65535，如果一行中的所有列的长度总和超过65535，也会建表失败
+    
       ```mysql
       create table test2(
       	a varchar(22000),
@@ -287,7 +298,7 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
       > 1118 - Row size too large. The maximum row size for the used table type, not counting BLOBs, is 65535. This includes storage overhead, check the manual. You have to change some columns to TEXT or BLOBs
       > 时间: 0.001s
       ```
-
+    
     - 使用多字节的字符集，如utf-8存储中文占用3个字节，使用char类型和varchar差不多
   
 - 页
