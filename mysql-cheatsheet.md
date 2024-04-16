@@ -1007,3 +1007,35 @@ mysqlbinlog binlog.[0-10]* | mysql -u root -p
 ### 主从
 
 ![](./images/master_slave.png)
+
+## 性能优化
+
+### CPU
+
+复杂查询如，比较、排序、连接等，比较耗费CPU。OLTP大多属于IO密集型
+
+### 内存
+
+既缓存数据，也缓存索引。
+
+![](./images/men_sys_bench.png)
+
+开发应用前应该预估活跃数据的大小，选择合适的内存大小。
+
+### 判断内存瓶颈方法：
+
+show global status like 'innodb%read%'
+
+#### 判断命中率：
+
+SHOW ENGINE INNODB STATUS
+
+### 基准测试
+
+#### sysbench
+
+![](./images/sys_bench_func.png)
+
+innodb一般测试磁盘和OLTP性能。主要测试fileio和oltp两个项目。
+
+#### mysql-tpcc
