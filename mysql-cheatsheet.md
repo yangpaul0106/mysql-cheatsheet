@@ -344,7 +344,7 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
     
     - key
 
-- 索引
+- ## 索引
 
   - 过多的索引可能会引起iostat监控磁盘使用率处于100%
 
@@ -410,7 +410,7 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
 
 - 索引提示（index hint）
 
-  - 显示告诉优化器使用哪个索引。
+  - 显式告诉优化器使用哪个索引。
   - 可能用到的情况
     - MySQL优化器错误的使用了某个索引，导致SQL语句运行得比较慢，这种概率非常低。
     - 某个SQL语句可以选择的索引比较多，优化器选择执行计划时间的开销大于SQL语句本身，例如range查询是比较耗时的操作。
@@ -445,9 +445,9 @@ Innodb_dblwr_pages_written/Innodb_dblwr_writes如果远小于61:1，说明系统
 
 - 全文检索
 
-  - 倒排索引：再辅助表（auxiliary table）中存储了单词与单词自身在文档所在位置之间的映射。
+  - 倒排索引：在辅助表（auxiliary table）中存储了单词与单词自身在文档所在位置之间的映射。
 
-    - inserted file index：{单词，单词所在文档ID}
+    - inverted file index：{单词，单词所在文档ID}
     - full inverted index：{单词，（文档所在ID，在具体文档中的位置）}，具体位置指的是在文档中处于第几个单词的位置。
 
     ![](./images/full_index_t.png)
@@ -460,11 +460,11 @@ full inverted index中存储的（documentId, position），其中position表示
 
 Innodb中，采用full inverted index，将（documentId，position）视为一个ilist，倒排索引将word存放于一张表中，这张表称为auxiliary table(辅助表)，innodb为了提高性能，提供了6张辅助表，这些辅助表存放于磁盘上。
 
-FTS Index Cache（全文检索索引缓存）：红黑树结构，根据(word, ilist)进行排序。新插入进cache中的数据已经更细到对应的数据表中，但是对全文索引的更新可能还只是在cache中，辅助表没有更新。innodb会批量对辅助表进行更新，而不是每插入一次就更新。当对全文索引进行查询时，首先将cache对应的word合并到辅助表中，然后再进行查询。在事务提交时将分词信息写入进cache中；数据库关闭时，将cache中的数据同步到磁盘上的辅助表；当数据库发生宕机时，cache中的分词信息可能没有同步到磁盘的辅助表，下次重新启动数据库时，innodb会自动读取原始文档进行分词，再将分词信息写入cache中。
+FTS Index Cache（全文检索索引缓存）：红黑树结构，根据(word, ilist)进行排序。新插入进cache中的数据已经更新到对应的数据表中，但是对全文索引的更新可能还只是在cache中，辅助表没有更新。innodb会批量对辅助表进行更新，而不是每插入一次就更新。当对全文索引进行查询时，首先将cache对应的word合并到辅助表中，然后再进行查询。在事务提交时将分词信息写入进cache中；数据库关闭时，将cache中的数据同步到磁盘上的辅助表；当数据库发生宕机时，cache中的分词信息可能没有同步到磁盘的辅助表，下次重新启动数据库时，innodb会自动读取原始文档进行分词，再将分词信息写入cache中。
 
 FTS_DOC_ID：类型必须是bigint unsigned not null，如果没有显示指定，innodb会默认增加此列并加上唯一索引
 
-分词插入是在事务提交时完成，删除操作在事务提交时，不会删除磁盘上的辅助表记录，指挥记录fts document id，并将这个id保存进deleted auxiliary table。
+分词插入是在事务提交时完成，删除操作在事务提交时，不会删除磁盘上的辅助表记录，只会记录fts document id，并将这个id保存进deleted auxiliary table。
 
 文档的DML不会删除索引中的数据，反而会在deleted表中增加记录，索引会随着应用变得很大，即使索引对应的文档数据已经被删除，查询也不会选择这些索引。可以手工使用命令进行删除：optimize table table_name。如果只要对倒排索引进行操作，可以设置参数：innodb_optimize_fulltext_only=1
 
@@ -695,7 +695,7 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
     
             ![](./images/phrase_search_in_natural_language_mode.png)
     
-          - boolean mode
+          - boolean mode（不分词，须完全匹配）
     
             ![](./images/phrase_search_in_boolean_mode.png)
     
