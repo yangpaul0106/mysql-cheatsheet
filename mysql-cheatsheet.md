@@ -751,19 +751,19 @@ set global innodb_ft_server_stopword_table='test/user_stopword'
   
       ![](./images/table_lock_compatible.png)
   
-  - 查看锁信息（information_schema）
+  - 查看锁信息
   
-    - INNODB_TRX
+    - information_schema.INNODB_TRX
   
       ![](./images/innodb_trx_table_sturcture.png)
   
-    - INNODB_LOCKS
+    - performance_schema.data_locks
   
-      ![](./images/innodb_locks_table_sturcture.png)
+      
   
-    - INNODB_LOCK_WAITS
+    - performance_schema.data_lock_waits
   
-      ![](./images/innodb_lock_waits_table_structure.png)
+      
   
   - 一致性非锁定读（consistent nonlocking read）：通过undo log实现多版本控制的方式，按照快照生成时间进行读取。事务A需要读取的行即使正在被事务B执行更新或删除且事务B占着锁未提交，事务A不会等待，而是读取相应的一个快照数据。使用undo log，不会对读取快照数据引起额外的开销，而且读取快照数据也不会上锁，因为没有事务需要对历史数据进行修改。
   
